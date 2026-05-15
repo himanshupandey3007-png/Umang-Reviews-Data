@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UMANG App — Reviews Dashboard</title>
+
+<script>
+  // Apply theme class BEFORE paint to avoid flash, and BEFORE Tailwind loads
+  // so it sees the correct class state from the start.
+  try {
+    const t = localStorage.getItem('theme') || 'dark';
+    if (t === 'dark') document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
+  } catch (_) {}
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // MUST be set AFTER the Tailwind CDN script. Otherwise darkMode defaults
+  // to 'media' (OS preference) and dark: variants always fire on dark-mode
+  // operating systems regardless of our class toggle.
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+        animation: {
+          'fade-in': 'fadeIn 0.4s ease-out',
+          'slide-up': 'slideUp 0.4s ease-out',
+          'spin-slow': 'spin 2s linear infinite',
+        },
+        keyframes: {
+          fadeIn: { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+          slideUp: { '0%': { opacity: 0, transform: 'translateY(8px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+        },
+      },
+    },
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.1/dist/jspdf.plugin.autotable.min.js"></script>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  /* Custom scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.35); border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.55); }
+
+  /* Subtle background gradient */
+  body.dark-bg {
+    background: radial-gradient(ellipse at top left, rgba(99,102,241,0.08), transparent 50%),
+                radial-gradient(ellipse at bottom right, rgba(168,85,247,0.06), transparent 50%),
+                #020617;
+  }
+  body.light-bg {
+    background: radial-gradient(ellipse at top left, rgba(99,102,241,0.10), transparent 55%),
+                radial-gradient(ellipse at bottom right, rgba(236,72,153,0.07), transparent 55%),
+                #eef2f7;
+  }
+  body.light-bg ::-webkit-scrollbar-thumb { background: rgba(71, 85, 105, 0.35); }
+  body.light-bg ::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 0.55); }
+
+  .glass {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+</style>
+</head>
+
+<body class="dark-bg text-slate-100 antialiased">
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+// ============================================================
+// CONFIG
+// ============================================================
+const GITHUB_OWNER = 'himanshupandey3007-png';
+const GITHUB_REPO  = 'Umang-Reviews-Data';
+const GITHUB_BRANCH = 'main';
+const FILE_PATH    = 'umang_all_reviews.xlsx';
+
+const dataUrl = () =>
+  `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${FILE_PATH}?t=${Date.now()}`;
+
+const RAG_COLORS = { GREEN: '#10b981', AMBER: '#f59e0b', RED: '#ef4444' };
+
+// ============================================================
+// ICONS (inline SVG)
+// ============================================================
+const Icon = ({ d, className = 'w-4 h-4', stroke = 'currentColor' }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+       stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+       className={className}><path d={d} /></svg>
+);
+const SunIcon = (p) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={p.className||'w-4 h-4'}>
+    <circle cx="12" cy="12" r="4"/>
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+  </svg>
+);
+const MoonIcon = (p) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={p.className||'w-4 h-4'}>
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+  </svg>
+);
+const RefreshIcon = (p) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={p.className||'w-4 h-4'}>
+    <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/>
+    <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>
+  </svg>
+);
+const DownloadIcon = (p) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={p.className||'w-4 h-4'}>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+    <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+  </svg>
+);
+const SearchIcon = (p) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={p.className||'w-4 h-4'}>
+    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+  </svg>
+);
+const ChevronDown = (p) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={p.className||'w-4 h-4'}>
+    <polyline points="6 9 12 15 18 9"/>
+  </svg>
+);
+const ExternalLink = (p) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={p.className||'w-3.5 h-3.5'}>
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+    <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+  </svg>
+);
+
+// ============================================================
+// CHART COMPONENT — uses Chart.js via refs
+// ============================================================
+function ChartCanvas({ config, deps }) {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    if (chartRef.current) chartRef.current.destroy();
+    chartRef.current = new Chart(ref.current, config);
+    return () => { chartRef.current?.destroy(); };
+  }, deps);
+  return <canvas ref={ref} />;
+}
+
+// ============================================================
+// DATA HOOK
+// ============================================================
+function useData() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(dataUrl(), { cache: 'reload' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = await res.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      const sheet = wb.Sheets['All reviews'] || wb.Sheets[wb.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const cleaned = data.map(r => {
+        const rawRating = Number(r.rating) || 0;
+        // Rating remap rule: 0,1 -> 3 ; 2,3 -> 4 ; 4,5 -> 5
+        const ratingAdj = rawRating <= 1 ? 3 : rawRating <= 3 ? 4 : 5;
+        const rawSent = typeof r.sentiment === 'number' ? r.sentiment : (parseFloat(r.sentiment) || 0);
+        // Sentiment rescale: [-1, +1] -> [0, 10] (5 = neutral)
+        const sent10 = Math.max(0, Math.min(10, (rawSent + 1) * 5));
+        return {
+          source: String(r.source || ''),
+          username: String(r.username || ''),
+          ratingRaw: rawRating,
+          rating: ratingAdj,
+          date: r.date instanceof Date ? r.date : (r.date ? new Date(r.date) : null),
+          review: String(r.review || ''),
+          category_tags: String(r.category_tags || ''),
+          url: String(r.url || ''),
+          sentimentRaw: rawSent,
+          sentiment: sent10,
+          themes: String(r.themes || ''),
+          rag: String(r.rag || '').toUpperCase(),
+          url_link: String(r.url_link || r.url || '')
+        };
+      });
+      setRows(cleaned);
+      setLastUpdated(new Date());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const t = setInterval(load, 10 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  return { rows, loading, error, lastUpdated, reload: load };
+}
+
+// ============================================================
+// THEME HOOK
+// ============================================================
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('theme') || 'dark'; }
+    catch (_) { return 'dark'; }
+  });
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    document.body.classList.toggle('dark-bg', theme === 'dark');
+    document.body.classList.toggle('light-bg', theme === 'light');
+    document.body.classList.toggle('text-slate-100', theme === 'dark');
+    document.body.classList.toggle('text-slate-900', theme === 'light');
+    try { localStorage.setItem('theme', theme); } catch (_) {}
+  }, [theme]);
+  return [theme, () => setTheme(t => t === 'dark' ? 'light' : 'dark')];
+}
+
+// ============================================================
+// EXPORTS
+// ============================================================
+function exportCSV(rows) {
+  const headers = ['date','source','username','rating','sentiment','rag','themes','review','url_link'];
+  const escape = v => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.join(',')];
+  rows.forEach(r => {
+    lines.push(headers.map(h => {
+      if (h === 'date') return escape(r.date ? r.date.toISOString().slice(0,10) : '');
+      return escape(r[h]);
+    }).join(','));
+  });
+  const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  triggerDownload(blob, `umang-reviews-${dateStamp()}.csv`);
+}
+
+function exportXLSX(rows) {
+  const data = rows.map(r => ({
+    date: r.date ? r.date.toISOString().slice(0,10) : '',
+    source: r.source,
+    username: r.username,
+    rating: r.rating,
+    sentiment: r.sentiment,
+    rag: r.rag,
+    themes: r.themes,
+    review: r.review,
+    url_link: r.url_link,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Reviews');
+  XLSX.writeFile(wb, `umang-reviews-${dateStamp()}.xlsx`);
+}
+
+function exportPDF(rows) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+  doc.setFontSize(16);
+  doc.setTextColor(30, 41, 59);
+  doc.text('UMANG App — Reviews Export', 40, 40);
+  doc.setFontSize(10);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Generated ${new Date().toLocaleString()}  •  ${rows.length} review(s)`, 40, 58);
+
+  doc.autoTable({
+    startY: 75,
+    head: [['Date','Source','User','Rating','Sent.','RAG','Themes','Review']],
+    body: rows.map(r => [
+      r.date ? r.date.toISOString().slice(0,10) : '',
+      r.source,
+      r.username,
+      r.rating || '',
+      typeof r.sentiment === 'number' ? r.sentiment.toFixed(2) : '',
+      r.rag,
+      r.themes,
+      r.review.length > 220 ? r.review.slice(0, 217) + '…' : r.review,
+    ]),
+    styles: { fontSize: 8, cellPadding: 4, overflow: 'linebreak', valign: 'top' },
+    headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 9 },
+    columnStyles: {
+      0: { cellWidth: 60 }, 1: { cellWidth: 90 }, 2: { cellWidth: 70 },
+      3: { cellWidth: 38 }, 4: { cellWidth: 38 }, 5: { cellWidth: 45 },
+      6: { cellWidth: 120 }, 7: { cellWidth: 'auto' },
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === 5) {
+        const v = data.cell.raw;
+        if (v === 'GREEN') { data.cell.styles.textColor = [16,185,129]; data.cell.styles.fontStyle = 'bold'; }
+        if (v === 'AMBER') { data.cell.styles.textColor = [245,158,11]; data.cell.styles.fontStyle = 'bold'; }
+        if (v === 'RED')   { data.cell.styles.textColor = [239,68,68]; data.cell.styles.fontStyle = 'bold'; }
+      }
+    }
+  });
+  doc.save(`umang-reviews-${dateStamp()}.pdf`);
+}
+
+function triggerDownload(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a);
+  a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+function dateStamp() { return new Date().toISOString().slice(0,10); }
+
+// ============================================================
+// UI PRIMITIVES
+// ============================================================
+function InfoTip({ text }) {
+  return (
+    <span className="relative inline-flex items-center group ml-1.5 align-middle">
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-[10px] font-bold cursor-help select-none">?</span>
+      <span className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 rounded-lg bg-slate-900 dark:bg-slate-800 text-white text-[11px] leading-snug w-60 shadow-xl border border-slate-700 normal-case font-normal">
+        {text}
+        <span className="absolute top-full left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 dark:bg-slate-800 rotate-45 -mt-1 border-r border-b border-slate-700"></span>
+      </span>
+    </span>
+  );
+}
+
+function Card({ children, className = '' }) {
+  return (
+    <div className={`rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06),0_4px_16px_-4px_rgba(15,23,42,0.05)] dark:shadow-none hover:shadow-[0_8px_24px_-8px_rgba(15,23,42,0.12)] dark:hover:shadow-none transition-shadow ${className}`}>
+      {children}
+    </div>
+  );
+}
+function CardHeader({ title, subtitle, right, info }) {
+  return (
+    <div className="flex items-start justify-between mb-3">
+      <div>
+        <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 inline-flex items-center">
+          {title}
+          {info && <InfoTip text={info} />}
+        </h3>
+        {subtitle && <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">{subtitle}</p>}
+      </div>
+      {right}
+    </div>
+  );
+}
+function Pill({ rag }) {
+  const map = {
+    GREEN: 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-400 dark:ring-0',
+    AMBER: 'bg-amber-100 text-amber-800 ring-1 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-400 dark:ring-0',
+    RED:   'bg-rose-100 text-rose-800 ring-1 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-400 dark:ring-0',
+  };
+  return <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-bold ${map[rag] || 'bg-slate-200 text-slate-700'}`}>{rag}</span>;
+}
+
+// ============================================================
+// HEADER
+// ============================================================
+function Header({ theme, toggleTheme, onRefresh, loading, lastUpdated, onExport }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const onClick = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+  return (
+    <header className="sticky top-0 z-40 glass border-b border-slate-200 dark:border-slate-800/70 bg-white/95 dark:bg-slate-950/70 shadow-sm dark:shadow-none">
+      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+            <span className="text-white font-bold text-lg">U</span>
+          </div>
+          <div>
+            <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-50 leading-tight">
+              UMANG App — Reviews Dashboard
+            </h1>
+            <p className="text-xs text-slate-600 dark:text-slate-400">
+              Live feedback across app stores, news & social
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-600 dark:text-slate-400 hidden sm:inline">
+            {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : 'Loading…'}
+          </span>
+          <button onClick={onRefresh} disabled={loading}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-transparent transition disabled:opacity-50">
+            <RefreshIcon className={`w-3.5 h-3.5 ${loading ? 'animate-spin-slow' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+          <div className="relative" ref={menuRef}>
+            <button onClick={() => setOpen(o => !o)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition shadow-md shadow-indigo-600/30">
+              <DownloadIcon className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Export</span>
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            {open && (
+              <div className="absolute right-0 mt-2 w-44 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-xl overflow-hidden animate-fade-in z-50">
+                {[
+                  { label: 'Export CSV', fmt: 'csv' },
+                  { label: 'Export Excel', fmt: 'xlsx' },
+                  { label: 'Export PDF', fmt: 'pdf' },
+                ].map(opt => (
+                  <button key={opt.fmt}
+                    onClick={() => { onExport(opt.fmt); setOpen(false); }}
+                    className="w-full text-left px-3 py-2 text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200">
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button onClick={toggleTheme}
+            className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-transparent transition"
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
+            {theme === 'dark' ? <SunIcon className="w-4 h-4" /> : <MoonIcon className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// ============================================================
+// RAG FILTER CHIPS — global filter
+// ============================================================
+function RagChips({ rows, value, onChange }) {
+  const counts = useMemo(() => {
+    const c = { GREEN: 0, AMBER: 0, RED: 0 };
+    rows.forEach(r => { if (c[r.rag] !== undefined) c[r.rag]++; });
+    return { ...c, total: rows.length };
+  }, [rows]);
+
+  const chips = [
+    { v: '',      label: 'All',   count: counts.total,
+      idle: 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300',
+      active: 'bg-slate-800 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-800 dark:border-slate-100',
+      dot: 'bg-slate-400' },
+    { v: 'GREEN', label: 'Green', count: counts.GREEN,
+      idle: 'border-emerald-300 dark:border-emerald-700/60 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10',
+      active: 'bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-500/30',
+      dot: 'bg-emerald-500' },
+    { v: 'AMBER', label: 'Amber', count: counts.AMBER,
+      idle: 'border-amber-300 dark:border-amber-700/60 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10',
+      active: 'bg-amber-500 text-white border-amber-500 shadow-md shadow-amber-500/30',
+      dot: 'bg-amber-500' },
+    { v: 'RED',   label: 'Red',   count: counts.RED,
+      idle: 'border-rose-300 dark:border-rose-700/60 text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10',
+      active: 'bg-rose-500 text-white border-rose-500 shadow-md shadow-rose-500/30',
+      dot: 'bg-rose-500' },
+  ];
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap mb-4 animate-slide-up">
+      <span className="text-xs uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400 mr-1">Filter:</span>
+      {chips.map(c => {
+        const active = value === c.v;
+        return (
+          <button
+            key={c.v || 'all'}
+            onClick={() => onChange(c.v)}
+            className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-sm font-semibold border transition-all ${active ? c.active : `bg-white dark:bg-slate-900/60 ${c.idle}`}`}
+          >
+            <span className={`w-2 h-2 rounded-full ${active ? 'bg-white' : c.dot}`}></span>
+            <span>{c.label}</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${active ? 'bg-white/25' : 'bg-slate-100 dark:bg-slate-800'}`}>{c.count}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// KPI GRID
+// ============================================================
+function KpiGrid({ rows, onDrill }) {
+  const stats = useMemo(() => {
+    const total = rows.length;
+    const ratings = rows.map(r => r.rating).filter(v => v > 0);
+    const avgRating = ratings.length ? ratings.reduce((a,b)=>a+b,0)/ratings.length : 0;
+    const sentiments = rows.map(r => r.sentiment).filter(v => !isNaN(v));
+    const avgSent = sentiments.length ? sentiments.reduce((a,b)=>a+b,0)/sentiments.length : 0;
+    const c = { GREEN:0, AMBER:0, RED:0 };
+    rows.forEach(r => { if (c[r.rag] !== undefined) c[r.rag]++; });
+    return { total, avgRating, avgSent, ...c };
+  }, [rows]);
+
+  const cards = [
+    { label: 'Total reviews', value: stats.total, accent: 'from-indigo-500 to-blue-500',
+      info: 'Count of reviews in the current filter scope.', drill: 'all' },
+    { label: 'Avg rating',    value: stats.avgRating.toFixed(2), suffix: '/ 5', accent: 'from-violet-500 to-purple-500',
+      info: 'Mean of all ratings in scope, after the remap rule: original 0,1 -> 3 | 2,3 -> 4 | 4,5 -> 5.', drill: null },
+    { label: 'Avg sentiment', value: stats.avgSent.toFixed(2), suffix: '/ 10', accent: 'from-cyan-500 to-teal-500',
+      info: 'Mean sentiment on a 0-10 scale (5 = neutral). Computed by rescaling each review’s raw NLP sentiment score from [-1, +1] to [0, 10].', drill: null },
+    { label: 'Green',         value: stats.GREEN, accent: 'from-emerald-500 to-green-500', valueClass: 'text-emerald-500',
+      info: 'Reviews flagged GREEN — positive feedback. Click to view them.', drill: 'GREEN' },
+    { label: 'Amber',         value: stats.AMBER, accent: 'from-amber-500 to-yellow-500', valueClass: 'text-amber-500',
+      info: 'Reviews flagged AMBER — mixed / neutral. Click to view them.', drill: 'AMBER' },
+    { label: 'Red',           value: stats.RED, accent: 'from-rose-500 to-red-500', valueClass: 'text-rose-500',
+      info: 'Reviews flagged RED — negative / problematic. Click to view them.', drill: 'RED' },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6 animate-slide-up">
+      {cards.map((c, i) => {
+        const isClickable = !!c.drill;
+        return (
+          <div key={i}
+            onClick={() => {
+              if (!isClickable) return;
+              if (c.drill === 'all') onDrill && onDrill({});
+              else onDrill && onDrill({ rag: c.drill });
+            }}
+            className={`relative overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:shadow-none hover:shadow-[0_8px_24px_-8px_rgba(15,23,42,0.15)] dark:hover:shadow-none transition-all hover:-translate-y-0.5 ${isClickable ? 'cursor-pointer' : ''}`}>
+            <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${c.accent}`} />
+            <div className="flex items-center text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400 font-bold mb-1">
+              <span>{c.label}</span>
+              <InfoTip text={c.info} />
+            </div>
+            <div className={`text-2xl sm:text-3xl font-extrabold ${c.valueClass || 'text-slate-900 dark:text-slate-50'}`}>
+              {c.value}
+              {c.suffix && <span className="text-sm font-medium text-slate-500 dark:text-slate-400 ml-1">{c.suffix}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// CHARTS
+// ============================================================
+function chartColors(theme) {
+  const dark = theme === 'dark';
+  return {
+    text: dark ? '#e2e8f0' : '#0f172a',
+    muted: dark ? '#94a3b8' : '#475569',
+    grid: dark ? '#1e293b' : '#cbd5e1',
+  };
+}
+
+function RagDonut({ rows, theme, onDrill }) {
+  const c = chartColors(theme);
+  const counts = { GREEN:0, AMBER:0, RED:0 };
+  rows.forEach(r => { if (counts[r.rag] !== undefined) counts[r.rag]++; });
+  const labels = Object.keys(counts);
+  return (
+    <Card className="p-5">
+      <CardHeader title="RAG distribution" subtitle="Red / Amber / Green breakdown"
+        info="Share of reviews flagged GREEN (positive), AMBER (mixed) or RED (negative) in the current filter scope. Click a slice to view its reviews." />
+      <div className="h-72">
+        <ChartCanvas
+          deps={[rows, theme]}
+          config={{
+            type: 'doughnut',
+            data: {
+              labels,
+              datasets: [{
+                data: labels.map(l => counts[l]),
+                backgroundColor: labels.map(l => RAG_COLORS[l]),
+                borderColor: theme === 'dark' ? '#0f172a' : '#ffffff',
+                borderWidth: 3,
+                hoverOffset: 8,
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              cutout: '65%',
+              onClick: (evt, els) => {
+                if (els.length && onDrill) {
+                  onDrill({ rag: labels[els[0].index] });
+                }
+              },
+              plugins: {
+                legend: { position: 'bottom', labels: { color: c.text, padding: 16, font: { size: 12, weight: '500' } } }
+              }
+            }
+          }}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function YearRagChart({ rows, theme, onDrill }) {
+  const c = chartColors(theme);
+  const byYear = {};
+  rows.forEach(r => {
+    if (!r.date) return;
+    const y = r.date.getFullYear();
+    if (!byYear[y]) byYear[y] = { GREEN:0, AMBER:0, RED:0 };
+    if (byYear[y][r.rag] !== undefined) byYear[y][r.rag]++;
+  });
+  const years = Object.keys(byYear).map(Number).sort((a,b)=>a-b);
+  return (
+    <Card className="p-5">
+      <CardHeader title="Year × RAG trend" subtitle="Sentiment health over time"
+        info="Stacked count of GREEN / AMBER / RED reviews per year. Click any segment to drill into reviews from that year + RAG combination." />
+      <div className="h-72">
+        <ChartCanvas
+          deps={[rows, theme]}
+          config={{
+            type: 'bar',
+            data: {
+              labels: years,
+              datasets: ['GREEN','AMBER','RED'].map(rag => ({
+                label: rag,
+                data: years.map(y => byYear[y][rag]),
+                backgroundColor: RAG_COLORS[rag],
+                borderRadius: 6,
+                maxBarThickness: 40,
+              }))
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              onClick: (evt, els) => {
+                if (els.length && onDrill) {
+                  const year = years[els[0].index];
+                  const rag  = ['GREEN','AMBER','RED'][els[0].datasetIndex];
+                  onDrill({ year, rag });
+                }
+              },
+              plugins: { legend: { labels: { color: c.text, font: { size: 12 } } } },
+              scales: {
+                x: { stacked: true, ticks: { color: c.muted }, grid: { color: c.grid, drawBorder: false } },
+                y: { stacked: true, ticks: { color: c.muted }, grid: { color: c.grid, drawBorder: false } }
+              }
+            }
+          }}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function HBarChart({ title, subtitle, info, data, color, rows, theme, onBarClick }) {
+  const c = chartColors(theme);
+  return (
+    <Card className="p-5">
+      <CardHeader title={title} subtitle={subtitle} info={info} />
+      <div className="h-96">
+        <ChartCanvas
+          deps={[rows, theme]}
+          config={{
+            type: 'bar',
+            data: {
+              labels: data.map(d => d[0]),
+              datasets: [{
+                data: data.map(d => d[1]),
+                backgroundColor: color,
+                borderRadius: 6,
+                maxBarThickness: 24,
+              }]
+            },
+            options: {
+              indexAxis: 'y',
+              responsive: true,
+              maintainAspectRatio: false,
+              onClick: (evt, els) => {
+                if (els.length && onBarClick) onBarClick(data[els[0].index][0]);
+              },
+              plugins: { legend: { display: false } },
+              scales: {
+                x: { ticks: { color: c.muted }, grid: { color: c.grid, drawBorder: false } },
+                y: { ticks: { color: c.text, font: { size: 11 } }, grid: { display: false, drawBorder: false } }
+              }
+            }
+          }}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function ThemeChart({ rows, theme, onDrill }) {
+  const counts = {};
+  rows.forEach(r => {
+    if (!r.themes) return;
+    r.themes.split(',').map(t => t.trim()).filter(Boolean).forEach(t => {
+      counts[t] = (counts[t] || 0) + 1;
+    });
+  });
+  const data = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0, 12);
+  return <HBarChart title="Top themes" subtitle="Most-mentioned topics in reviews"
+    info="Number of reviews mentioning each theme. A single review can mention multiple themes (themes are comma-separated). Click a bar to see reviews tagged with that theme."
+    data={data} color="#8b5cf6" rows={rows} theme={theme}
+    onBarClick={(theme) => onDrill && onDrill({ theme })} />;
+}
+
+function SourceChart({ rows, theme, onDrill }) {
+  const counts = {};
+  rows.forEach(r => { if (r.source) counts[r.source] = (counts[r.source] || 0) + 1; });
+  const data = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0, 12);
+  return <HBarChart title="Top sources" subtitle="Channels with most reviews"
+    info="Number of reviews per source channel (Play Store, Twitter/X, news sites, etc). Top 12 shown. Click a bar to see all reviews from that source."
+    data={data} color="#3b82f6" rows={rows} theme={theme}
+    onBarClick={(source) => onDrill && onDrill({ source })} />;
+}
+
+function SentimentChart({ rows, theme, onDrill }) {
+  const c = chartColors(theme);
+  const agg = {};
+  rows.forEach(r => {
+    if (!r.source) return;
+    if (!agg[r.source]) agg[r.source] = { sum:0, n:0 };
+    agg[r.source].sum += r.sentiment;
+    agg[r.source].n += 1;
+  });
+  const data = Object.entries(agg)
+    .filter(([,v]) => v.n >= 2)
+    .map(([k,v]) => [k, v.sum/v.n, v.n])
+    .sort((a,b) => a[1] - b[1]);
+  return (
+    <Card className="p-5">
+      <CardHeader title="Sentiment by source" subtitle="Sources with 2+ reviews — 0-10 polarity scale"
+        info="Average sentiment per source on the 0-10 scale (5 = neutral). Green bars = above 5, red bars = below 5. Click a bar to see all reviews from that source." />
+      <div className="h-96">
+        <ChartCanvas
+          deps={[rows, theme]}
+          config={{
+            type: 'bar',
+            data: {
+              labels: data.map(d => d[0]),
+              datasets: [{
+                data: data.map(d => d[1]),
+                backgroundColor: data.map(d => d[1] >= 5 ? '#10b981' : '#ef4444'),
+                borderRadius: 6,
+                maxBarThickness: 22,
+              }]
+            },
+            options: {
+              indexAxis: 'y',
+              responsive: true,
+              maintainAspectRatio: false,
+              onClick: (evt, els) => {
+                if (els.length && onDrill) {
+                  const idx = els[0].index;
+                  onDrill({ source: data[idx][0] });
+                }
+              },
+              plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: ctx => `Sentiment ${ctx.parsed.x.toFixed(2)} / 10 (n=${data[ctx.dataIndex][2]})` } }
+              },
+              scales: {
+                x: { min: 0, max: 10, ticks: { color: c.muted, stepSize: 2 }, grid: { color: c.grid, drawBorder: false } },
+                y: { ticks: { color: c.text, font: { size: 11 } }, grid: { display: false, drawBorder: false } }
+              }
+            }
+          }}
+        />
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================
+// REVIEWS TABLE
+// ============================================================
+function ReviewsTable({ rows, filtered, filters, setFilters, sources, themes }) {
+  return (
+    <Card className="p-5">
+      <CardHeader
+        title="All reviews"
+        subtitle={`${filtered.length} of ${rows.length} reviews — exports use the filtered set`}
+      />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+        <div className="relative col-span-1 sm:col-span-2 lg:col-span-2">
+          <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={filters.search}
+            onChange={e => setFilters(f => ({...f, search: e.target.value}))}
+            placeholder="Search reviews, sources, usernames…"
+            className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-slate-100 shadow-sm dark:shadow-none placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        </div>
+        <select value={filters.rag} onChange={e => setFilters(f => ({...f, rag: e.target.value}))}
+          className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-slate-100 shadow-sm dark:shadow-none focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option value="">All RAG</option>
+          <option value="GREEN">GREEN</option>
+          <option value="AMBER">AMBER</option>
+          <option value="RED">RED</option>
+        </select>
+        <select value={filters.source} onChange={e => setFilters(f => ({...f, source: e.target.value}))}
+          className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-slate-100 shadow-sm dark:shadow-none focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option value="">All sources</option>
+          {sources.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+        <select value={filters.theme} onChange={e => setFilters(f => ({...f, theme: e.target.value}))}
+          className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-slate-100 shadow-sm dark:shadow-none focus:outline-none focus:ring-2 focus:ring-indigo-500 col-span-1 lg:col-span-1">
+          <option value="">All themes</option>
+          {themes.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <button onClick={() => setFilters({ search: '', rag: '', source: '', theme: '' })}
+          className="px-3 py-2 rounded-lg text-sm font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-transparent transition">
+          Clear filters
+        </button>
+      </div>
+
+      <div className="overflow-auto rounded-xl border border-slate-200 dark:border-slate-800 max-h-[600px] bg-white dark:bg-transparent">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-slate-100 dark:bg-slate-900 text-xs uppercase tracking-wider text-slate-700 dark:text-slate-400 border-b border-slate-300 dark:border-slate-800">
+            <tr>
+              <th className="text-left px-3 py-3 font-bold">Date</th>
+              <th className="text-left px-3 py-3 font-bold">Source</th>
+              <th className="text-left px-3 py-3 font-bold">User</th>
+              <th className="text-left px-3 py-3 font-bold">Rating</th>
+              <th className="text-left px-3 py-3 font-bold">Sent.</th>
+              <th className="text-left px-3 py-3 font-bold">RAG</th>
+              <th className="text-left px-3 py-3 font-bold">Themes</th>
+              <th className="text-left px-3 py-3 font-bold">Review</th>
+              <th className="text-left px-3 py-3 font-bold">Link</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+            {filtered.map((r, i) => (
+              <tr key={i} className="hover:bg-indigo-50/60 dark:hover:bg-slate-800/50 transition">
+                <td className="px-3 py-3 whitespace-nowrap text-slate-700 dark:text-slate-400 font-medium">{r.date ? r.date.toISOString().slice(0,10) : ''}</td>
+                <td className="px-3 py-3 whitespace-nowrap text-slate-900 dark:text-slate-200 font-semibold">{r.source}</td>
+                <td className="px-3 py-3 whitespace-nowrap text-slate-700 dark:text-slate-400 max-w-[160px] truncate">{r.username}</td>
+                <td className="px-3 py-3 text-slate-800 dark:text-slate-300 font-semibold">{r.rating || ''}</td>
+                <td className="px-3 py-3 font-semibold whitespace-nowrap">
+                  <span className={r.sentiment >= 5 ? 'text-emerald-600 dark:text-emerald-500' : 'text-rose-600 dark:text-rose-500'}>
+                    {typeof r.sentiment === 'number' ? r.sentiment.toFixed(2) : ''}
+                  </span>
+                  <span className="text-slate-400 text-xs ml-0.5">/10</span>
+                </td>
+                <td className="px-3 py-3">{r.rag ? <Pill rag={r.rag} /> : ''}</td>
+                <td className="px-3 py-3 text-xs text-slate-700 dark:text-slate-400 max-w-[180px]">{r.themes}</td>
+                <td className="px-3 py-3 text-slate-800 dark:text-slate-300 max-w-[480px] leading-relaxed">{r.review}</td>
+                <td className="px-3 py-3">
+                  {r.url_link && (
+                    <a href={r.url_link} target="_blank" rel="noopener" className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-400 font-semibold">
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={9} className="px-3 py-10 text-center text-slate-500 dark:text-slate-500">No reviews match the current filters.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================
+// DRILL-DOWN MODAL — opens when user clicks a chart slice / KPI / bar
+// ============================================================
+function filterRowsBy(rows, drill) {
+  return rows.filter(r => {
+    if (drill.rag    && r.rag !== drill.rag) return false;
+    if (drill.source && r.source !== drill.source) return false;
+    if (drill.theme) {
+      const has = r.themes.split(',').map(s => s.trim()).includes(drill.theme);
+      if (!has) return false;
+    }
+    if (drill.year && (!r.date || r.date.getFullYear() !== Number(drill.year))) return false;
+    return true;
+  });
+}
+
+function describeDrill(drill) {
+  const parts = [];
+  if (drill.rag)    parts.push(drill.rag);
+  if (drill.year)   parts.push(drill.year);
+  if (drill.source) parts.push(`source: ${drill.source}`);
+  if (drill.theme)  parts.push(`theme: ${drill.theme}`);
+  return parts.length ? parts.join(' · ') : 'All reviews';
+}
+
+function DrillDownModal({ drill, rows, onClose, onApplyAsFilter }) {
+  if (!drill) return null;
+  const subset = filterRowsBy(rows, drill).sort((a,b) => (b.date?.getTime()||0) - (a.date?.getTime()||0));
+  return (
+    <div className="fixed inset-0 bg-black/60 z-[55] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-5xl max-h-[85vh] shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-gradient-to-r from-slate-50 to-white dark:from-slate-900 dark:to-slate-900">
+          <div>
+            <h3 className="font-bold text-slate-900 dark:text-slate-100">{describeDrill(drill)}</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">{subset.length} review{subset.length===1?'':'s'} match this selection</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => { onApplyAsFilter(drill); onClose(); }}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition">
+              Apply as filter
+            </button>
+            <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
+              <CloseIcon className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        <div className="overflow-auto flex-1 bg-slate-50 dark:bg-slate-950/40">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-slate-100 dark:bg-slate-900 text-xs uppercase tracking-wider text-slate-700 dark:text-slate-400 border-b border-slate-300 dark:border-slate-800">
+              <tr>
+                <th className="text-left px-3 py-2.5 font-bold">Date</th>
+                <th className="text-left px-3 py-2.5 font-bold">Source</th>
+                <th className="text-left px-3 py-2.5 font-bold">Rating</th>
+                <th className="text-left px-3 py-2.5 font-bold">Sent.</th>
+                <th className="text-left px-3 py-2.5 font-bold">RAG</th>
+                <th className="text-left px-3 py-2.5 font-bold">Review</th>
+                <th className="text-left px-3 py-2.5 font-bold">Link</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+              {subset.map((r, i) => (
+                <tr key={i} className="hover:bg-indigo-50/60 dark:hover:bg-slate-800/50">
+                  <td className="px-3 py-2.5 whitespace-nowrap text-slate-700 dark:text-slate-400">{r.date ? r.date.toISOString().slice(0,10) : ''}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-slate-900 dark:text-slate-200 font-semibold">{r.source}</td>
+                  <td className="px-3 py-2.5 text-slate-800 dark:text-slate-300 font-semibold">{r.rating || ''}</td>
+                  <td className="px-3 py-2.5 font-semibold whitespace-nowrap">
+                    <span className={r.sentiment >= 5 ? 'text-emerald-600 dark:text-emerald-500' : 'text-rose-600 dark:text-rose-500'}>
+                      {r.sentiment.toFixed(2)}
+                    </span>
+                    <span className="text-slate-400 text-xs ml-0.5">/10</span>
+                  </td>
+                  <td className="px-3 py-2.5">{r.rag ? <Pill rag={r.rag} /> : ''}</td>
+                  <td className="px-3 py-2.5 text-slate-800 dark:text-slate-300 max-w-[500px] leading-relaxed">{r.review}</td>
+                  <td className="px-3 py-2.5">
+                    {r.url_link && (
+                      <a href={r.url_link} target="_blank" rel="noopener" className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-500 hover:text-indigo-700">
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {subset.length === 0 && (
+                <tr><td colSpan={7} className="px-3 py-12 text-center text-slate-500">No reviews match this selection.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// AI INSIGHTS / SUMMARY MODAL — calls the same Worker, filter-aware
+// ============================================================
+function basicMarkdown(text) {
+  // Lightweight renderer — bullets, bold, paragraphs
+  const lines = (text || '').split('\n');
+  const out = [];
+  let buf = [];
+  const flush = () => { if (buf.length) { out.push({ type: 'p', text: buf.join(' ') }); buf = []; } };
+  for (const ln of lines) {
+    const t = ln.trim();
+    if (!t) { flush(); continue; }
+    if (/^[-*•]\s+/.test(t)) { flush(); out.push({ type: 'li', text: t.replace(/^[-*•]\s+/, '') }); }
+    else if (/^#{1,3}\s+/.test(t)) { flush(); out.push({ type: 'h', text: t.replace(/^#+\s+/, '') }); }
+    else buf.push(t);
+  }
+  flush();
+  const renderBold = (s) => {
+    const parts = s.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, i) => {
+      if (/^\*\*[^*]+\*\*$/.test(p)) return <strong key={i}>{p.slice(2, -2)}</strong>;
+      return <React.Fragment key={i}>{p}</React.Fragment>;
+    });
+  };
+  const grouped = [];
+  let group = null;
+  for (const item of out) {
+    if (item.type === 'li') {
+      if (!group) { group = { type: 'ul', items: [] }; grouped.push(group); }
+      group.items.push(item.text);
+    } else {
+      group = null;
+      grouped.push(item);
+    }
+  }
+  return grouped.map((g, i) => {
+    if (g.type === 'ul') return <ul key={i} className="list-disc pl-6 space-y-1.5 my-2 text-sm text-slate-800 dark:text-slate-200">{g.items.map((it, j) => <li key={j}>{renderBold(it)}</li>)}</ul>;
+    if (g.type === 'h')  return <h4 key={i} className="font-bold text-slate-900 dark:text-slate-100 mt-3 mb-1">{renderBold(g.text)}</h4>;
+    return <p key={i} className="text-sm text-slate-800 dark:text-slate-200 leading-relaxed my-2">{renderBold(g.text)}</p>;
+  });
+}
+
+function AiModal({ mode, rows, filters, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [content, setContent] = useState('');
+  const [error, setError]     = useState(null);
+  const titleMap = {
+    insights: { title: 'Dashboard insights',  emoji: '💡', sub: 'AI-generated observations on the current scope' },
+    summary:  { title: 'Dashboard summary',   emoji: '📋', sub: 'Executive summary of the current scope' },
+  };
+  const cfg = titleMap[mode] || titleMap.insights;
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const prompt = mode === 'insights'
+          ? 'Analyze the data and return 5-7 sharp, actionable INSIGHTS as a markdown bullet list. Each bullet should cite a specific number, source, theme, or year. Highlight surprising patterns, regressions, or wins. Be specific — no generic statements.'
+          : 'Write a concise EXECUTIVE SUMMARY in 3-4 short paragraphs covering: (1) overall health (counts, RAG split, avg sentiment), (2) biggest issues (top problem themes / worst sources), (3) trajectory across years, (4) one recommended next action. Use plain text with paragraph breaks. No filter changes.';
+        const systemPrompt = buildSystemPrompt(rows, filters);
+        const { message } = await callChatApi({ systemPrompt, history: [], userText: prompt + '\n\nReturn the result in the JSON shape {"message": "...markdown text...", "filters": null}. Use markdown headings / bullets where helpful.' });
+        if (!cancelled) setContent(message || '');
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [mode, rows, filters]);
+
+  const scopeLabel = [
+    filters.rag    && `RAG=${filters.rag}`,
+    filters.source && `source=${filters.source}`,
+    filters.theme  && `theme=${filters.theme}`,
+    filters.search && `search="${filters.search}"`,
+  ].filter(Boolean).join(' · ') || 'All reviews';
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-[55] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-2xl max-h-[85vh] shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+          <div>
+            <h3 className="font-bold text-base">{cfg.emoji} {cfg.title}</h3>
+            <p className="text-xs opacity-80">{cfg.sub} · scope: {scopeLabel} · n = {rows.length}</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-white/15">
+            <CloseIcon className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="overflow-auto flex-1 px-5 py-4">
+          {loading && (
+            <div className="text-center py-10">
+              <div className="w-10 h-10 mx-auto border-4 border-slate-200 dark:border-slate-800 border-t-indigo-500 rounded-full animate-spin mb-3"></div>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Analyzing {rows.length} reviews…</p>
+            </div>
+          )}
+          {error && (
+            <div className="p-4 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-sm">
+              <b>Failed:</b> {error}
+            </div>
+          )}
+          {!loading && !error && (
+            <div>{basicMarkdown(content)}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// CHATBOT — calls a Cloudflare Worker proxy that forwards to Groq.
+// The worker holds the API key server-side so visitors don't need one.
+// See worker/DEPLOY.md for the 5-min setup.
+// ============================================================
+
+// PASTE YOUR DEPLOYED CLOUDFLARE WORKER URL HERE (no trailing slash):
+const CHAT_API_URL = 'REPLACE_WITH_YOUR_WORKER_URL';
+const GROQ_MODEL   = 'llama-3.3-70b-versatile';
+
+function compactRows(rows) {
+  // Trim each row to the analytical essentials and clip long reviews.
+  return rows.map(r => ({
+    src:  r.source,
+    user: r.username,
+    rt:   r.rating,
+    d:    r.date ? r.date.toISOString().slice(0,10) : null,
+    sent: typeof r.sentiment === 'number' ? Number(r.sentiment.toFixed(2)) : null,
+    th:   r.themes,
+    rag:  r.rag,
+    rev:  (r.review || '').slice(0, 320),
+  }));
+}
+
+function buildSystemPrompt(rows, filters) {
+  const compact = compactRows(rows);
+  const sources = [...new Set(rows.map(r => r.source).filter(Boolean))];
+  const themesSet = new Set();
+  rows.forEach(r => r.themes.split(',').map(t => t.trim()).filter(Boolean).forEach(t => themesSet.add(t)));
+
+  return [
+    'You are a data analyst for the UMANG App Reviews Dashboard.',
+    'Answer questions about the 110-row reviews dataset. Be concise (2-4 sentences). Quote specific numbers or short review excerpts when relevant.',
+    '',
+    'SCHEMA:',
+    '- src = source (e.g., "Play Store", "Twitter/X")',
+    '- user = username, rt = rating 0..5, d = date (YYYY-MM-DD)',
+    '- sent = sentiment -1..+1, th = comma-separated themes',
+    '- rag = GREEN | AMBER | RED, rev = review text (truncated to 320 chars)',
+    '',
+    'VALID SOURCES (use exact string when filtering):',
+    JSON.stringify(sources),
+    '',
+    'VALID THEMES:',
+    JSON.stringify([...themesSet]),
+    '',
+    'CURRENT FILTERS: ' + JSON.stringify(filters),
+    '',
+    'You MUST respond with a single JSON object — no prose outside JSON. Shape:',
+    '{',
+    '  "message": "your reply to the user (markdown OK)",',
+    '  "filters": { "rag": "", "source": "", "theme": "", "search": "" } | null',
+    '}',
+    'Rules for filters field:',
+    '- Include filters ONLY when the user asks to see, filter, narrow, or focus on a subset.',
+    '- Use exact strings from VALID SOURCES / VALID THEMES. RAG must be "GREEN" "AMBER" "RED" or "" to clear.',
+    '- search is a free-text substring; use it for anything not covered by rag/source/theme.',
+    '- Set filters to null when the user is just asking a question and no UI change is needed.',
+    '- Omit a key (or use "") to leave that filter unchanged / clear it.',
+    '',
+    'DATA (110 rows):',
+    JSON.stringify(compact),
+  ].join('\n');
+}
+
+async function callChatApi({ systemPrompt, history, userText }) {
+  if (!CHAT_API_URL || CHAT_API_URL === 'REPLACE_WITH_YOUR_WORKER_URL') {
+    throw new Error('Chat is not configured yet. Deploy the Cloudflare Worker and paste its URL in index.html (see worker/DEPLOY.md).');
+  }
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.slice(-8).map(m => ({ role: m.role, content: m.content })),
+    { role: 'user', content: userText }
+  ];
+  const res = await fetch(CHAT_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages,
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      max_tokens: 900,
+    })
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Chat API ${res.status}: ${t.slice(0,200)}`);
+  }
+  const json = await res.json();
+  const raw = json.choices?.[0]?.message?.content || '';
+  try {
+    const obj = JSON.parse(raw);
+    return {
+      message: String(obj.message || obj.response || raw),
+      filters: obj.filters && typeof obj.filters === 'object' ? obj.filters : null,
+    };
+  } catch {
+    return { message: raw, filters: null };
+  }
+}
+
+function ChatBubble(props) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className||'w-5 h-5'}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+    </svg>
+  );
+}
+function CloseIcon(props) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className||'w-4 h-4'}>
+      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>
+  );
+}
+function SendIcon(props) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className||'w-4 h-4'}>
+      <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+    </svg>
+  );
+}
+function SettingsIcon(props) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className||'w-4 h-4'}>
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  );
+}
+
+function ChatBot({ rows, filters, setFilters }) {
+  const [open, setOpen]           = useState(false);
+  const [messages, setMessages]   = useState(() => {
+    try { return JSON.parse(localStorage.getItem('chat-history') || '[]'); }
+    catch { return []; }
+  });
+  const [input, setInput]         = useState('');
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState(null);
+  const scrollRef                 = useRef(null);
+
+  useEffect(() => {
+    try { localStorage.setItem('chat-history', JSON.stringify(messages.slice(-50))); } catch (_) {}
+  }, [messages]);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, loading, open]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    if (!rows || rows.length === 0) {
+      setError('Dashboard data still loading.'); return;
+    }
+    setError(null);
+    setInput('');
+    const userMsg = { role: 'user', content: text };
+    setMessages(m => [...m, userMsg]);
+    setLoading(true);
+    try {
+      const systemPrompt = buildSystemPrompt(rows, filters);
+      const { message, filters: newFilters } = await callChatApi({
+        systemPrompt, history: [...messages, userMsg], userText: text,
+      });
+      const botMsg = { role: 'assistant', content: message };
+      setMessages(m => [...m, botMsg]);
+      if (newFilters) {
+        const allowed = ['rag', 'source', 'theme', 'search'];
+        setFilters(f => {
+          const next = { ...f };
+          for (const k of allowed) {
+            if (k in newFilters) {
+              const v = newFilters[k];
+              if (typeof v === 'string') next[k] = v;
+            }
+          }
+          return next;
+        });
+      }
+    } catch (e) {
+      setMessages(m => [...m, { role: 'assistant', content: `⚠️ ${e.message}`, error: true }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearChat = () => {
+    setMessages([]);
+    try { localStorage.removeItem('chat-history'); } catch (_) {}
+  };
+
+  const suggestions = [
+    'Top 3 complaint themes?',
+    'Summarize Twitter sentiment',
+    'Show me red reviews about EPFO',
+    'Worst-rated source?',
+  ];
+
+  return (
+    <>
+      {/* Floating launcher button */}
+      {!open && (
+        <button
+          onClick={() => setOpen(true)}
+          className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-xl shadow-indigo-600/40 hover:scale-105 active:scale-95 transition flex items-center justify-center z-40"
+          title="Ask the dashboard"
+        >
+          <ChatBubble className="w-6 h-6" />
+        </button>
+      )}
+
+      {/* Chat panel */}
+      {open && (
+        <div className="fixed bottom-6 right-6 w-[380px] max-w-[calc(100vw-2rem)] h-[600px] max-h-[calc(100vh-2rem)] rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl flex flex-col z-50 animate-slide-up overflow-hidden">
+          {/* Header */}
+          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+            <div className="flex items-center gap-2">
+              <ChatBubble className="w-4 h-4" />
+              <div>
+                <div className="text-sm font-bold leading-tight">Ask the dashboard</div>
+                <div className="text-[10px] opacity-80">Powered by Groq · Llama 3.3 70B</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setOpen(false)} className="p-1.5 rounded hover:bg-white/15" title="Close">
+                <CloseIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Messages */}
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50 dark:bg-slate-950/50">
+            {messages.length === 0 && (
+              <div className="text-center text-slate-600 dark:text-slate-400 text-sm pt-6">
+                <div className="text-4xl mb-2">💬</div>
+                <p className="font-semibold text-slate-800 dark:text-slate-200">Hi! I can analyze the {rows?.length || 0} reviews.</p>
+                <p className="text-xs mt-1 mb-3">Try a question or pick a suggestion:</p>
+                <div className="grid grid-cols-1 gap-1.5 px-2">
+                  {suggestions.map(s => (
+                    <button key={s} onClick={() => setInput(s)}
+                      className="text-xs text-left px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-indigo-400 dark:hover:border-indigo-500 text-slate-700 dark:text-slate-300 transition">
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] px-3 py-2 rounded-2xl text-sm leading-relaxed ${
+                  m.role === 'user'
+                    ? 'bg-indigo-600 text-white rounded-br-sm'
+                    : m.error
+                      ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300 rounded-bl-sm'
+                      : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-sm shadow-sm'
+                }`}>
+                  {m.content}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div className="flex justify-start">
+                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl rounded-bl-sm px-3 py-2 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{animationDelay: '0ms'}}></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{animationDelay: '120ms'}}></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{animationDelay: '240ms'}}></span>
+                </div>
+              </div>
+            )}
+            {error && (
+              <div className="text-xs text-rose-600 text-center">{error}</div>
+            )}
+          </div>
+
+          {/* Input */}
+          <div className="border-t border-slate-200 dark:border-slate-800 p-3 bg-white dark:bg-slate-900">
+            {messages.length > 0 && (
+              <button onClick={clearChat} className="text-[10px] text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-1.5">
+                Clear conversation
+              </button>
+            )}
+            <div className="flex items-end gap-2">
+              <textarea
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+                }}
+                placeholder="Ask about the reviews..."
+                rows={1}
+                className="flex-1 resize-none px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-400"
+                disabled={loading}
+              />
+              <button
+                onClick={send}
+                disabled={loading || !input.trim()}
+                className="p-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition"
+              >
+                <SendIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </>
+  );
+}
+
+// ============================================================
+// APP
+// ============================================================
+function App() {
+  const { rows, loading, error, lastUpdated, reload } = useData();
+  const [theme, toggleTheme] = useTheme();
+  const [filters, setFilters] = useState({ search: '', rag: '', source: '', theme: '' });
+  const [drill, setDrill]     = useState(null);
+  const [aiMode, setAiMode]   = useState(null);
+
+  const sources = useMemo(() => [...new Set(rows.map(r => r.source).filter(Boolean))].sort(), [rows]);
+  const themesList = useMemo(() => {
+    const s = new Set();
+    rows.forEach(r => r.themes.split(',').map(t => t.trim()).filter(Boolean).forEach(t => s.add(t)));
+    return [...s].sort();
+  }, [rows]);
+
+  const filtered = useMemo(() => {
+    const q = filters.search.toLowerCase().trim();
+    let out = rows.filter(r => {
+      if (filters.rag && r.rag !== filters.rag) return false;
+      if (filters.source && r.source !== filters.source) return false;
+      if (filters.theme && !r.themes.toLowerCase().includes(filters.theme.toLowerCase())) return false;
+      if (q) {
+        const hay = `${r.source} ${r.username} ${r.review} ${r.themes} ${r.category_tags}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    out.sort((a,b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0));
+    return out;
+  }, [rows, filters]);
+
+  const handleExport = (fmt) => {
+    if (filtered.length === 0) return;
+    if (fmt === 'csv') exportCSV(filtered);
+    else if (fmt === 'xlsx') exportXLSX(filtered);
+    else if (fmt === 'pdf') exportPDF(filtered);
+  };
+
+  return (
+    <div className="min-h-screen">
+      <Header theme={theme} toggleTheme={toggleTheme} onRefresh={reload} loading={loading} lastUpdated={lastUpdated} onExport={handleExport} />
+      <main className="max-w-7xl mx-auto px-6 py-6">
+        {error && (
+          <div className="mb-6 p-4 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-sm">
+            <b>Failed to load data:</b> {error}
+            <div className="mt-1 text-xs opacity-80">
+              Check that <code>{FILE_PATH}</code> exists in <code>{GITHUB_OWNER}/{GITHUB_REPO}@{GITHUB_BRANCH}</code> and is public.
+            </div>
+          </div>
+        )}
+        {loading && rows.length === 0 ? (
+          <div className="flex items-center justify-center py-32">
+            <div className="text-center">
+              <div className="w-12 h-12 mx-auto border-4 border-slate-200 dark:border-slate-800 border-t-indigo-500 rounded-full animate-spin mb-4"></div>
+              <p className="text-slate-500 dark:text-slate-400 text-sm">Loading data from GitHub…</p>
+            </div>
+          </div>
+        ) : rows.length > 0 ? (
+          <>
+            <RagChips rows={rows} value={filters.rag} onChange={(v) => setFilters(f => ({...f, rag: v}))} />
+            <div className="flex flex-wrap items-center gap-2 mb-4 animate-slide-up">
+              <button onClick={() => setAiMode('insights')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm shadow-indigo-500/30 transition">
+                <span>💡</span> AI Insights
+              </button>
+              <button onClick={() => setAiMode('summary')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-cyan-500 to-teal-600 hover:from-cyan-600 hover:to-teal-700 text-white shadow-sm shadow-cyan-500/30 transition">
+                <span>📋</span> Summary
+              </button>
+              <span className="text-xs text-slate-600 dark:text-slate-400 ml-1">Both reflect the current filter scope.</span>
+            </div>
+            <KpiGrid rows={filtered} onDrill={(d) => setDrill(d)} />
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4 animate-slide-up">
+              <div className="lg:col-span-1"><RagDonut rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} /></div>
+              <div className="lg:col-span-2"><YearRagChart rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} /></div>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4 animate-slide-up">
+              <ThemeChart rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} />
+              <SourceChart rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} />
+            </div>
+            <div className="mb-4 animate-slide-up"><SentimentChart rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} /></div>
+            <div className="animate-slide-up">
+              <ReviewsTable
+                rows={rows}
+                filtered={filtered}
+                filters={filters}
+                setFilters={setFilters}
+                sources={sources}
+                themes={themesList}
+              />
+            </div>
+          </>
+        ) : null}
+        <footer className="mt-10 pt-6 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-500 flex items-center justify-between flex-wrap gap-2">
+          <span>Data auto-syncs from <a className="text-indigo-600 dark:text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-400 font-semibold" target="_blank" rel="noopener" href={`https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}`}>{GITHUB_OWNER}/{GITHUB_REPO}</a> — refreshes every 10 min.</span>
+          <span>Built with React • Tailwind • Chart.js • SheetJS • jsPDF</span>
+        </footer>
+      </main>
+      <ChatBot rows={rows} filters={filters} setFilters={setFilters} />
+      <DrillDownModal
+        drill={drill}
+        rows={filtered}
+        onClose={() => setDrill(null)}
+        onApplyAsFilter={(d) => setFilters(f => ({
+          ...f,
+          rag:    d.rag    !== undefined ? d.rag    : f.rag,
+          source: d.source !== undefined ? d.source : f.source,
+          theme:  d.theme  !== undefined ? d.theme  : f.theme,
+        }))}
+      />
+      {aiMode && (
+        <AiModal
+          mode={aiMode}
+          rows={filtered}
+          filters={filters}
+          onClose={() => setAiMode(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
