@@ -188,19 +188,29 @@ function useData() {
       const wb = XLSX.read(buf, { type: 'array', cellDates: true });
       const sheet = wb.Sheets['All reviews'] || wb.Sheets[wb.SheetNames[0]];
       const data = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-      const cleaned = data.map(r => ({
-        source: String(r.source || ''),
-        username: String(r.username || ''),
-        rating: Number(r.rating) || 0,
-        date: r.date instanceof Date ? r.date : (r.date ? new Date(r.date) : null),
-        review: String(r.review || ''),
-        category_tags: String(r.category_tags || ''),
-        url: String(r.url || ''),
-        sentiment: typeof r.sentiment === 'number' ? r.sentiment : (parseFloat(r.sentiment) || 0),
-        themes: String(r.themes || ''),
-        rag: String(r.rag || '').toUpperCase(),
-        url_link: String(r.url_link || r.url || '')
-      }));
+      const cleaned = data.map(r => {
+        const rawRating = Number(r.rating) || 0;
+        // Rating remap rule: 0,1 -> 3 ; 2,3 -> 4 ; 4,5 -> 5
+        const ratingAdj = rawRating <= 1 ? 3 : rawRating <= 3 ? 4 : 5;
+        const rawSent = typeof r.sentiment === 'number' ? r.sentiment : (parseFloat(r.sentiment) || 0);
+        // Sentiment rescale: [-1, +1] -> [0, 10] (5 = neutral)
+        const sent10 = Math.max(0, Math.min(10, (rawSent + 1) * 5));
+        return {
+          source: String(r.source || ''),
+          username: String(r.username || ''),
+          ratingRaw: rawRating,
+          rating: ratingAdj,
+          date: r.date instanceof Date ? r.date : (r.date ? new Date(r.date) : null),
+          review: String(r.review || ''),
+          category_tags: String(r.category_tags || ''),
+          url: String(r.url || ''),
+          sentimentRaw: rawSent,
+          sentiment: sent10,
+          themes: String(r.themes || ''),
+          rag: String(r.rag || '').toUpperCase(),
+          url_link: String(r.url_link || r.url || '')
+        };
+      });
       setRows(cleaned);
       setLastUpdated(new Date());
     } catch (e) {
@@ -329,6 +339,18 @@ function dateStamp() { return new Date().toISOString().slice(0,10); }
 // ============================================================
 // UI PRIMITIVES
 // ============================================================
+function InfoTip({ text }) {
+  return (
+    <span className="relative inline-flex items-center group ml-1.5 align-middle">
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-[10px] font-bold cursor-help select-none">?</span>
+      <span className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 rounded-lg bg-slate-900 dark:bg-slate-800 text-white text-[11px] leading-snug w-60 shadow-xl border border-slate-700 normal-case font-normal">
+        {text}
+        <span className="absolute top-full left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 dark:bg-slate-800 rotate-45 -mt-1 border-r border-b border-slate-700"></span>
+      </span>
+    </span>
+  );
+}
+
 function Card({ children, className = '' }) {
   return (
     <div className={`rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06),0_4px_16px_-4px_rgba(15,23,42,0.05)] dark:shadow-none hover:shadow-[0_8px_24px_-8px_rgba(15,23,42,0.12)] dark:hover:shadow-none transition-shadow ${className}`}>
@@ -336,11 +358,14 @@ function Card({ children, className = '' }) {
     </div>
   );
 }
-function CardHeader({ title, subtitle, right }) {
+function CardHeader({ title, subtitle, right, info }) {
   return (
     <div className="flex items-start justify-between mb-3">
       <div>
-        <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">{title}</h3>
+        <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 inline-flex items-center">
+          {title}
+          {info && <InfoTip text={info} />}
+        </h3>
         {subtitle && <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">{subtitle}</p>}
       </div>
       {right}
@@ -479,7 +504,7 @@ function RagChips({ rows, value, onChange }) {
 // ============================================================
 // KPI GRID
 // ============================================================
-function KpiGrid({ rows }) {
+function KpiGrid({ rows, onDrill }) {
   const stats = useMemo(() => {
     const total = rows.length;
     const ratings = rows.map(r => r.rating).filter(v => v > 0);
@@ -492,27 +517,44 @@ function KpiGrid({ rows }) {
   }, [rows]);
 
   const cards = [
-    { label: 'Total reviews', value: stats.total, accent: 'from-indigo-500 to-blue-500' },
-    { label: 'Avg rating',    value: stats.avgRating.toFixed(2), suffix: '/ 5', accent: 'from-violet-500 to-purple-500' },
-    { label: 'Avg sentiment', value: stats.avgSent.toFixed(2), accent: 'from-cyan-500 to-teal-500' },
-    { label: 'Green',         value: stats.GREEN, accent: 'from-emerald-500 to-green-500', valueClass: 'text-emerald-500' },
-    { label: 'Amber',         value: stats.AMBER, accent: 'from-amber-500 to-yellow-500', valueClass: 'text-amber-500' },
-    { label: 'Red',           value: stats.RED, accent: 'from-rose-500 to-red-500', valueClass: 'text-rose-500' },
+    { label: 'Total reviews', value: stats.total, accent: 'from-indigo-500 to-blue-500',
+      info: 'Count of reviews in the current filter scope.', drill: 'all' },
+    { label: 'Avg rating',    value: stats.avgRating.toFixed(2), suffix: '/ 5', accent: 'from-violet-500 to-purple-500',
+      info: 'Mean of all ratings in scope, after the remap rule: original 0,1 -> 3 | 2,3 -> 4 | 4,5 -> 5.', drill: null },
+    { label: 'Avg sentiment', value: stats.avgSent.toFixed(2), suffix: '/ 10', accent: 'from-cyan-500 to-teal-500',
+      info: 'Mean sentiment on a 0-10 scale (5 = neutral). Computed by rescaling each review’s raw NLP sentiment score from [-1, +1] to [0, 10].', drill: null },
+    { label: 'Green',         value: stats.GREEN, accent: 'from-emerald-500 to-green-500', valueClass: 'text-emerald-500',
+      info: 'Reviews flagged GREEN — positive feedback. Click to view them.', drill: 'GREEN' },
+    { label: 'Amber',         value: stats.AMBER, accent: 'from-amber-500 to-yellow-500', valueClass: 'text-amber-500',
+      info: 'Reviews flagged AMBER — mixed / neutral. Click to view them.', drill: 'AMBER' },
+    { label: 'Red',           value: stats.RED, accent: 'from-rose-500 to-red-500', valueClass: 'text-rose-500',
+      info: 'Reviews flagged RED — negative / problematic. Click to view them.', drill: 'RED' },
   ];
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6 animate-slide-up">
-      {cards.map((c, i) => (
-        <div key={i}
-          className="relative overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:shadow-none hover:shadow-[0_8px_24px_-8px_rgba(15,23,42,0.15)] dark:hover:shadow-none transition-all hover:-translate-y-0.5">
-          <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${c.accent}`} />
-          <div className="text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400 font-bold mb-1">{c.label}</div>
-          <div className={`text-2xl sm:text-3xl font-extrabold ${c.valueClass || 'text-slate-900 dark:text-slate-50'}`}>
-            {c.value}
-            {c.suffix && <span className="text-sm font-medium text-slate-500 dark:text-slate-400 ml-1">{c.suffix}</span>}
+      {cards.map((c, i) => {
+        const isClickable = !!c.drill;
+        return (
+          <div key={i}
+            onClick={() => {
+              if (!isClickable) return;
+              if (c.drill === 'all') onDrill && onDrill({});
+              else onDrill && onDrill({ rag: c.drill });
+            }}
+            className={`relative overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:shadow-none hover:shadow-[0_8px_24px_-8px_rgba(15,23,42,0.15)] dark:hover:shadow-none transition-all hover:-translate-y-0.5 ${isClickable ? 'cursor-pointer' : ''}`}>
+            <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${c.accent}`} />
+            <div className="flex items-center text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400 font-bold mb-1">
+              <span>{c.label}</span>
+              <InfoTip text={c.info} />
+            </div>
+            <div className={`text-2xl sm:text-3xl font-extrabold ${c.valueClass || 'text-slate-900 dark:text-slate-50'}`}>
+              {c.value}
+              {c.suffix && <span className="text-sm font-medium text-slate-500 dark:text-slate-400 ml-1">{c.suffix}</span>}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -529,14 +571,15 @@ function chartColors(theme) {
   };
 }
 
-function RagDonut({ rows, theme }) {
+function RagDonut({ rows, theme, onDrill }) {
   const c = chartColors(theme);
   const counts = { GREEN:0, AMBER:0, RED:0 };
   rows.forEach(r => { if (counts[r.rag] !== undefined) counts[r.rag]++; });
   const labels = Object.keys(counts);
   return (
     <Card className="p-5">
-      <CardHeader title="RAG distribution" subtitle="Red / Amber / Green breakdown" />
+      <CardHeader title="RAG distribution" subtitle="Red / Amber / Green breakdown"
+        info="Share of reviews flagged GREEN (positive), AMBER (mixed) or RED (negative) in the current filter scope. Click a slice to view its reviews." />
       <div className="h-72">
         <ChartCanvas
           deps={[rows, theme]}
@@ -556,6 +599,11 @@ function RagDonut({ rows, theme }) {
               responsive: true,
               maintainAspectRatio: false,
               cutout: '65%',
+              onClick: (evt, els) => {
+                if (els.length && onDrill) {
+                  onDrill({ rag: labels[els[0].index] });
+                }
+              },
               plugins: {
                 legend: { position: 'bottom', labels: { color: c.text, padding: 16, font: { size: 12, weight: '500' } } }
               }
@@ -567,7 +615,7 @@ function RagDonut({ rows, theme }) {
   );
 }
 
-function YearRagChart({ rows, theme }) {
+function YearRagChart({ rows, theme, onDrill }) {
   const c = chartColors(theme);
   const byYear = {};
   rows.forEach(r => {
@@ -579,7 +627,8 @@ function YearRagChart({ rows, theme }) {
   const years = Object.keys(byYear).map(Number).sort((a,b)=>a-b);
   return (
     <Card className="p-5">
-      <CardHeader title="Year × RAG trend" subtitle="Sentiment health over time" />
+      <CardHeader title="Year × RAG trend" subtitle="Sentiment health over time"
+        info="Stacked count of GREEN / AMBER / RED reviews per year. Click any segment to drill into reviews from that year + RAG combination." />
       <div className="h-72">
         <ChartCanvas
           deps={[rows, theme]}
@@ -598,6 +647,13 @@ function YearRagChart({ rows, theme }) {
             options: {
               responsive: true,
               maintainAspectRatio: false,
+              onClick: (evt, els) => {
+                if (els.length && onDrill) {
+                  const year = years[els[0].index];
+                  const rag  = ['GREEN','AMBER','RED'][els[0].datasetIndex];
+                  onDrill({ year, rag });
+                }
+              },
               plugins: { legend: { labels: { color: c.text, font: { size: 12 } } } },
               scales: {
                 x: { stacked: true, ticks: { color: c.muted }, grid: { color: c.grid, drawBorder: false } },
@@ -611,11 +667,11 @@ function YearRagChart({ rows, theme }) {
   );
 }
 
-function HBarChart({ title, subtitle, data, color, rows, theme }) {
+function HBarChart({ title, subtitle, info, data, color, rows, theme, onBarClick }) {
   const c = chartColors(theme);
   return (
     <Card className="p-5">
-      <CardHeader title={title} subtitle={subtitle} />
+      <CardHeader title={title} subtitle={subtitle} info={info} />
       <div className="h-96">
         <ChartCanvas
           deps={[rows, theme]}
@@ -634,6 +690,9 @@ function HBarChart({ title, subtitle, data, color, rows, theme }) {
               indexAxis: 'y',
               responsive: true,
               maintainAspectRatio: false,
+              onClick: (evt, els) => {
+                if (els.length && onBarClick) onBarClick(data[els[0].index][0]);
+              },
               plugins: { legend: { display: false } },
               scales: {
                 x: { ticks: { color: c.muted }, grid: { color: c.grid, drawBorder: false } },
@@ -647,7 +706,7 @@ function HBarChart({ title, subtitle, data, color, rows, theme }) {
   );
 }
 
-function ThemeChart({ rows, theme }) {
+function ThemeChart({ rows, theme, onDrill }) {
   const counts = {};
   rows.forEach(r => {
     if (!r.themes) return;
@@ -656,17 +715,23 @@ function ThemeChart({ rows, theme }) {
     });
   });
   const data = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0, 12);
-  return <HBarChart title="Top themes" subtitle="Most-mentioned topics in reviews" data={data} color="#8b5cf6" rows={rows} theme={theme} />;
+  return <HBarChart title="Top themes" subtitle="Most-mentioned topics in reviews"
+    info="Number of reviews mentioning each theme. A single review can mention multiple themes (themes are comma-separated). Click a bar to see reviews tagged with that theme."
+    data={data} color="#8b5cf6" rows={rows} theme={theme}
+    onBarClick={(theme) => onDrill && onDrill({ theme })} />;
 }
 
-function SourceChart({ rows, theme }) {
+function SourceChart({ rows, theme, onDrill }) {
   const counts = {};
   rows.forEach(r => { if (r.source) counts[r.source] = (counts[r.source] || 0) + 1; });
   const data = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0, 12);
-  return <HBarChart title="Top sources" subtitle="Channels with most reviews" data={data} color="#3b82f6" rows={rows} theme={theme} />;
+  return <HBarChart title="Top sources" subtitle="Channels with most reviews"
+    info="Number of reviews per source channel (Play Store, Twitter/X, news sites, etc). Top 12 shown. Click a bar to see all reviews from that source."
+    data={data} color="#3b82f6" rows={rows} theme={theme}
+    onBarClick={(source) => onDrill && onDrill({ source })} />;
 }
 
-function SentimentChart({ rows, theme }) {
+function SentimentChart({ rows, theme, onDrill }) {
   const c = chartColors(theme);
   const agg = {};
   rows.forEach(r => {
@@ -681,7 +746,8 @@ function SentimentChart({ rows, theme }) {
     .sort((a,b) => a[1] - b[1]);
   return (
     <Card className="p-5">
-      <CardHeader title="Sentiment by source" subtitle="Sources with 2+ reviews — diverging by polarity" />
+      <CardHeader title="Sentiment by source" subtitle="Sources with 2+ reviews — 0-10 polarity scale"
+        info="Average sentiment per source on the 0-10 scale (5 = neutral). Green bars = above 5, red bars = below 5. Click a bar to see all reviews from that source." />
       <div className="h-96">
         <ChartCanvas
           deps={[rows, theme]}
@@ -691,7 +757,7 @@ function SentimentChart({ rows, theme }) {
               labels: data.map(d => d[0]),
               datasets: [{
                 data: data.map(d => d[1]),
-                backgroundColor: data.map(d => d[1] >= 0 ? '#10b981' : '#ef4444'),
+                backgroundColor: data.map(d => d[1] >= 5 ? '#10b981' : '#ef4444'),
                 borderRadius: 6,
                 maxBarThickness: 22,
               }]
@@ -700,12 +766,18 @@ function SentimentChart({ rows, theme }) {
               indexAxis: 'y',
               responsive: true,
               maintainAspectRatio: false,
+              onClick: (evt, els) => {
+                if (els.length && onDrill) {
+                  const idx = els[0].index;
+                  onDrill({ source: data[idx][0] });
+                }
+              },
               plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: ctx => `Sentiment ${ctx.parsed.x.toFixed(2)} (n=${data[ctx.dataIndex][2]})` } }
+                tooltip: { callbacks: { label: ctx => `Sentiment ${ctx.parsed.x.toFixed(2)} / 10 (n=${data[ctx.dataIndex][2]})` } }
               },
               scales: {
-                x: { min: -1, max: 1, ticks: { color: c.muted }, grid: { color: c.grid, drawBorder: false } },
+                x: { min: 0, max: 10, ticks: { color: c.muted, stepSize: 2 }, grid: { color: c.grid, drawBorder: false } },
                 y: { ticks: { color: c.text, font: { size: 11 } }, grid: { display: false, drawBorder: false } }
               }
             }
@@ -782,10 +854,11 @@ function ReviewsTable({ rows, filtered, filters, setFilters, sources, themes }) 
                 <td className="px-3 py-3 whitespace-nowrap text-slate-900 dark:text-slate-200 font-semibold">{r.source}</td>
                 <td className="px-3 py-3 whitespace-nowrap text-slate-700 dark:text-slate-400 max-w-[160px] truncate">{r.username}</td>
                 <td className="px-3 py-3 text-slate-800 dark:text-slate-300 font-semibold">{r.rating || ''}</td>
-                <td className="px-3 py-3 font-semibold">
-                  <span className={r.sentiment >= 0 ? 'text-emerald-600 dark:text-emerald-500' : 'text-rose-600 dark:text-rose-500'}>
+                <td className="px-3 py-3 font-semibold whitespace-nowrap">
+                  <span className={r.sentiment >= 5 ? 'text-emerald-600 dark:text-emerald-500' : 'text-rose-600 dark:text-rose-500'}>
                     {typeof r.sentiment === 'number' ? r.sentiment.toFixed(2) : ''}
                   </span>
+                  <span className="text-slate-400 text-xs ml-0.5">/10</span>
                 </td>
                 <td className="px-3 py-3">{r.rag ? <Pill rag={r.rag} /> : ''}</td>
                 <td className="px-3 py-3 text-xs text-slate-700 dark:text-slate-400 max-w-[180px]">{r.themes}</td>
@@ -810,11 +883,219 @@ function ReviewsTable({ rows, filtered, filters, setFilters, sources, themes }) 
 }
 
 // ============================================================
-// CHATBOT — Groq API, with filter-control via structured JSON
+// DRILL-DOWN MODAL — opens when user clicks a chart slice / KPI / bar
+// ============================================================
+function filterRowsBy(rows, drill) {
+  return rows.filter(r => {
+    if (drill.rag    && r.rag !== drill.rag) return false;
+    if (drill.source && r.source !== drill.source) return false;
+    if (drill.theme) {
+      const has = r.themes.split(',').map(s => s.trim()).includes(drill.theme);
+      if (!has) return false;
+    }
+    if (drill.year && (!r.date || r.date.getFullYear() !== Number(drill.year))) return false;
+    return true;
+  });
+}
+
+function describeDrill(drill) {
+  const parts = [];
+  if (drill.rag)    parts.push(drill.rag);
+  if (drill.year)   parts.push(drill.year);
+  if (drill.source) parts.push(`source: ${drill.source}`);
+  if (drill.theme)  parts.push(`theme: ${drill.theme}`);
+  return parts.length ? parts.join(' · ') : 'All reviews';
+}
+
+function DrillDownModal({ drill, rows, onClose, onApplyAsFilter }) {
+  if (!drill) return null;
+  const subset = filterRowsBy(rows, drill).sort((a,b) => (b.date?.getTime()||0) - (a.date?.getTime()||0));
+  return (
+    <div className="fixed inset-0 bg-black/60 z-[55] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-5xl max-h-[85vh] shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-gradient-to-r from-slate-50 to-white dark:from-slate-900 dark:to-slate-900">
+          <div>
+            <h3 className="font-bold text-slate-900 dark:text-slate-100">{describeDrill(drill)}</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">{subset.length} review{subset.length===1?'':'s'} match this selection</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => { onApplyAsFilter(drill); onClose(); }}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition">
+              Apply as filter
+            </button>
+            <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
+              <CloseIcon className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        <div className="overflow-auto flex-1 bg-slate-50 dark:bg-slate-950/40">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-slate-100 dark:bg-slate-900 text-xs uppercase tracking-wider text-slate-700 dark:text-slate-400 border-b border-slate-300 dark:border-slate-800">
+              <tr>
+                <th className="text-left px-3 py-2.5 font-bold">Date</th>
+                <th className="text-left px-3 py-2.5 font-bold">Source</th>
+                <th className="text-left px-3 py-2.5 font-bold">Rating</th>
+                <th className="text-left px-3 py-2.5 font-bold">Sent.</th>
+                <th className="text-left px-3 py-2.5 font-bold">RAG</th>
+                <th className="text-left px-3 py-2.5 font-bold">Review</th>
+                <th className="text-left px-3 py-2.5 font-bold">Link</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+              {subset.map((r, i) => (
+                <tr key={i} className="hover:bg-indigo-50/60 dark:hover:bg-slate-800/50">
+                  <td className="px-3 py-2.5 whitespace-nowrap text-slate-700 dark:text-slate-400">{r.date ? r.date.toISOString().slice(0,10) : ''}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-slate-900 dark:text-slate-200 font-semibold">{r.source}</td>
+                  <td className="px-3 py-2.5 text-slate-800 dark:text-slate-300 font-semibold">{r.rating || ''}</td>
+                  <td className="px-3 py-2.5 font-semibold whitespace-nowrap">
+                    <span className={r.sentiment >= 5 ? 'text-emerald-600 dark:text-emerald-500' : 'text-rose-600 dark:text-rose-500'}>
+                      {r.sentiment.toFixed(2)}
+                    </span>
+                    <span className="text-slate-400 text-xs ml-0.5">/10</span>
+                  </td>
+                  <td className="px-3 py-2.5">{r.rag ? <Pill rag={r.rag} /> : ''}</td>
+                  <td className="px-3 py-2.5 text-slate-800 dark:text-slate-300 max-w-[500px] leading-relaxed">{r.review}</td>
+                  <td className="px-3 py-2.5">
+                    {r.url_link && (
+                      <a href={r.url_link} target="_blank" rel="noopener" className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-500 hover:text-indigo-700">
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {subset.length === 0 && (
+                <tr><td colSpan={7} className="px-3 py-12 text-center text-slate-500">No reviews match this selection.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// AI INSIGHTS / SUMMARY MODAL — calls the same Worker, filter-aware
+// ============================================================
+function basicMarkdown(text) {
+  // Lightweight renderer — bullets, bold, paragraphs
+  const lines = (text || '').split('\n');
+  const out = [];
+  let buf = [];
+  const flush = () => { if (buf.length) { out.push({ type: 'p', text: buf.join(' ') }); buf = []; } };
+  for (const ln of lines) {
+    const t = ln.trim();
+    if (!t) { flush(); continue; }
+    if (/^[-*•]\s+/.test(t)) { flush(); out.push({ type: 'li', text: t.replace(/^[-*•]\s+/, '') }); }
+    else if (/^#{1,3}\s+/.test(t)) { flush(); out.push({ type: 'h', text: t.replace(/^#+\s+/, '') }); }
+    else buf.push(t);
+  }
+  flush();
+  const renderBold = (s) => {
+    const parts = s.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, i) => {
+      if (/^\*\*[^*]+\*\*$/.test(p)) return <strong key={i}>{p.slice(2, -2)}</strong>;
+      return <React.Fragment key={i}>{p}</React.Fragment>;
+    });
+  };
+  const grouped = [];
+  let group = null;
+  for (const item of out) {
+    if (item.type === 'li') {
+      if (!group) { group = { type: 'ul', items: [] }; grouped.push(group); }
+      group.items.push(item.text);
+    } else {
+      group = null;
+      grouped.push(item);
+    }
+  }
+  return grouped.map((g, i) => {
+    if (g.type === 'ul') return <ul key={i} className="list-disc pl-6 space-y-1.5 my-2 text-sm text-slate-800 dark:text-slate-200">{g.items.map((it, j) => <li key={j}>{renderBold(it)}</li>)}</ul>;
+    if (g.type === 'h')  return <h4 key={i} className="font-bold text-slate-900 dark:text-slate-100 mt-3 mb-1">{renderBold(g.text)}</h4>;
+    return <p key={i} className="text-sm text-slate-800 dark:text-slate-200 leading-relaxed my-2">{renderBold(g.text)}</p>;
+  });
+}
+
+function AiModal({ mode, rows, filters, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [content, setContent] = useState('');
+  const [error, setError]     = useState(null);
+  const titleMap = {
+    insights: { title: 'Dashboard insights',  emoji: '💡', sub: 'AI-generated observations on the current scope' },
+    summary:  { title: 'Dashboard summary',   emoji: '📋', sub: 'Executive summary of the current scope' },
+  };
+  const cfg = titleMap[mode] || titleMap.insights;
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const prompt = mode === 'insights'
+          ? 'Analyze the data and return 5-7 sharp, actionable INSIGHTS as a markdown bullet list. Each bullet should cite a specific number, source, theme, or year. Highlight surprising patterns, regressions, or wins. Be specific — no generic statements.'
+          : 'Write a concise EXECUTIVE SUMMARY in 3-4 short paragraphs covering: (1) overall health (counts, RAG split, avg sentiment), (2) biggest issues (top problem themes / worst sources), (3) trajectory across years, (4) one recommended next action. Use plain text with paragraph breaks. No filter changes.';
+        const systemPrompt = buildSystemPrompt(rows, filters);
+        const { message } = await callChatApi({ systemPrompt, history: [], userText: prompt + '\n\nReturn the result in the JSON shape {"message": "...markdown text...", "filters": null}. Use markdown headings / bullets where helpful.' });
+        if (!cancelled) setContent(message || '');
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [mode, rows, filters]);
+
+  const scopeLabel = [
+    filters.rag    && `RAG=${filters.rag}`,
+    filters.source && `source=${filters.source}`,
+    filters.theme  && `theme=${filters.theme}`,
+    filters.search && `search="${filters.search}"`,
+  ].filter(Boolean).join(' · ') || 'All reviews';
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-[55] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-2xl max-h-[85vh] shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+          <div>
+            <h3 className="font-bold text-base">{cfg.emoji} {cfg.title}</h3>
+            <p className="text-xs opacity-80">{cfg.sub} · scope: {scopeLabel} · n = {rows.length}</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-white/15">
+            <CloseIcon className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="overflow-auto flex-1 px-5 py-4">
+          {loading && (
+            <div className="text-center py-10">
+              <div className="w-10 h-10 mx-auto border-4 border-slate-200 dark:border-slate-800 border-t-indigo-500 rounded-full animate-spin mb-3"></div>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Analyzing {rows.length} reviews…</p>
+            </div>
+          )}
+          {error && (
+            <div className="p-4 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-sm">
+              <b>Failed:</b> {error}
+            </div>
+          )}
+          {!loading && !error && (
+            <div>{basicMarkdown(content)}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// CHATBOT — calls a Cloudflare Worker proxy that forwards to Groq.
+// The worker holds the API key server-side so visitors don't need one.
+// See worker/DEPLOY.md for the 5-min setup.
 // ============================================================
 
-const GROQ_URL    = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL  = 'llama-3.3-70b-versatile';
+// PASTE YOUR DEPLOYED CLOUDFLARE WORKER URL HERE (no trailing slash):
+const CHAT_API_URL = 'REPLACE_WITH_YOUR_WORKER_URL';
+const GROQ_MODEL   = 'llama-3.3-70b-versatile';
 
 function compactRows(rows) {
   // Trim each row to the analytical essentials and clip long reviews.
@@ -871,15 +1152,18 @@ function buildSystemPrompt(rows, filters) {
   ].join('\n');
 }
 
-async function callGroq({ apiKey, systemPrompt, history, userText }) {
+async function callChatApi({ systemPrompt, history, userText }) {
+  if (!CHAT_API_URL || CHAT_API_URL === 'REPLACE_WITH_YOUR_WORKER_URL') {
+    throw new Error('Chat is not configured yet. Deploy the Cloudflare Worker and paste its URL in index.html (see worker/DEPLOY.md).');
+  }
   const messages = [
     { role: 'system', content: systemPrompt },
     ...history.slice(-8).map(m => ({ role: m.role, content: m.content })),
     { role: 'user', content: userText }
   ];
-  const res = await fetch(GROQ_URL, {
+  const res = await fetch(CHAT_API_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: GROQ_MODEL,
       messages,
@@ -890,7 +1174,7 @@ async function callGroq({ apiKey, systemPrompt, history, userText }) {
   });
   if (!res.ok) {
     const t = await res.text();
-    throw new Error(`Groq API ${res.status}: ${t.slice(0,200)}`);
+    throw new Error(`Chat API ${res.status}: ${t.slice(0,200)}`);
   }
   const json = await res.json();
   const raw = json.choices?.[0]?.message?.content || '';
@@ -941,9 +1225,6 @@ function SettingsIcon(props) {
 
 function ChatBot({ rows, filters, setFilters }) {
   const [open, setOpen]           = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [apiKey, setApiKey]       = useState(() => localStorage.getItem('groq-api-key') || '');
-  const [keyDraft, setKeyDraft]   = useState(apiKey);
   const [messages, setMessages]   = useState(() => {
     try { return JSON.parse(localStorage.getItem('chat-history') || '[]'); }
     catch { return []; }
@@ -964,7 +1245,6 @@ function ChatBot({ rows, filters, setFilters }) {
   const send = async () => {
     const text = input.trim();
     if (!text || loading) return;
-    if (!apiKey) { setShowSettings(true); return; }
     if (!rows || rows.length === 0) {
       setError('Dashboard data still loading.'); return;
     }
@@ -975,8 +1255,8 @@ function ChatBot({ rows, filters, setFilters }) {
     setLoading(true);
     try {
       const systemPrompt = buildSystemPrompt(rows, filters);
-      const { message, filters: newFilters } = await callGroq({
-        apiKey, systemPrompt, history: [...messages, userMsg], userText: text,
+      const { message, filters: newFilters } = await callChatApi({
+        systemPrompt, history: [...messages, userMsg], userText: text,
       });
       const botMsg = { role: 'assistant', content: message };
       setMessages(m => [...m, botMsg]);
@@ -998,13 +1278,6 @@ function ChatBot({ rows, filters, setFilters }) {
     } finally {
       setLoading(false);
     }
-  };
-
-  const saveKey = () => {
-    const k = keyDraft.trim();
-    setApiKey(k);
-    try { localStorage.setItem('groq-api-key', k); } catch (_) {}
-    setShowSettings(false);
   };
 
   const clearChat = () => {
@@ -1045,9 +1318,6 @@ function ChatBot({ rows, filters, setFilters }) {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <button onClick={() => setShowSettings(true)} className="p-1.5 rounded hover:bg-white/15" title="Settings">
-                <SettingsIcon className="w-4 h-4" />
-              </button>
               <button onClick={() => setOpen(false)} className="p-1.5 rounded hover:bg-white/15" title="Close">
                 <CloseIcon className="w-4 h-4" />
               </button>
@@ -1060,23 +1330,15 @@ function ChatBot({ rows, filters, setFilters }) {
               <div className="text-center text-slate-600 dark:text-slate-400 text-sm pt-6">
                 <div className="text-4xl mb-2">💬</div>
                 <p className="font-semibold text-slate-800 dark:text-slate-200">Hi! I can analyze the {rows?.length || 0} reviews.</p>
-                <p className="text-xs mt-1 mb-3">{apiKey ? 'Try a question or pick a suggestion:' : 'Add a free Groq API key to get started.'}</p>
-                {apiKey && (
-                  <div className="grid grid-cols-1 gap-1.5 px-2">
-                    {suggestions.map(s => (
-                      <button key={s} onClick={() => setInput(s)}
-                        className="text-xs text-left px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-indigo-400 dark:hover:border-indigo-500 text-slate-700 dark:text-slate-300 transition">
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {!apiKey && (
-                  <button onClick={() => setShowSettings(true)}
-                    className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition">
-                    <SettingsIcon className="w-3.5 h-3.5" /> Set up API key
-                  </button>
-                )}
+                <p className="text-xs mt-1 mb-3">Try a question or pick a suggestion:</p>
+                <div className="grid grid-cols-1 gap-1.5 px-2">
+                  {suggestions.map(s => (
+                    <button key={s} onClick={() => setInput(s)}
+                      className="text-xs text-left px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-indigo-400 dark:hover:border-indigo-500 text-slate-700 dark:text-slate-300 transition">
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             {messages.map((m, i) => (
@@ -1120,7 +1382,7 @@ function ChatBot({ rows, filters, setFilters }) {
                 onKeyDown={e => {
                   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
                 }}
-                placeholder={apiKey ? "Ask about the reviews..." : "Add API key in settings first"}
+                placeholder="Ask about the reviews..."
                 rows={1}
                 className="flex-1 resize-none px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-slate-400"
                 disabled={loading}
@@ -1137,42 +1399,6 @@ function ChatBot({ rows, filters, setFilters }) {
         </div>
       )}
 
-      {/* Settings modal */}
-      {showSettings && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-fade-in" onClick={() => setShowSettings(false)}>
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 w-full max-w-md p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold text-slate-900 dark:text-slate-100">Chatbot settings</h3>
-              <button onClick={() => setShowSettings(false)} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
-                <CloseIcon className="w-4 h-4" />
-              </button>
-            </div>
-            <p className="text-xs text-slate-600 dark:text-slate-400 mb-3">
-              The chatbot uses <a href="https://console.groq.com/keys" target="_blank" rel="noopener" className="text-indigo-600 dark:text-indigo-400 underline">Groq's free API</a>. Sign up, create a key, paste it below. Stored only in this browser.
-            </p>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Groq API key</label>
-            <input
-              type="password"
-              value={keyDraft}
-              onChange={e => setKeyDraft(e.target.value)}
-              placeholder="gsk_..."
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
-            />
-            <div className="flex gap-2 mt-4">
-              <button onClick={saveKey} className="flex-1 px-3 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition">
-                Save key
-              </button>
-              <button onClick={() => { setKeyDraft(''); setApiKey(''); try { localStorage.removeItem('groq-api-key'); } catch(_) {}; setShowSettings(false); }}
-                className="px-3 py-2 rounded-lg text-sm font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition">
-                Clear
-              </button>
-            </div>
-            <p className="text-[10px] text-slate-500 mt-3">
-              Security note: the key is stored in localStorage on this browser only. Don't paste production keys into shared computers.
-            </p>
-          </div>
-        </div>
-      )}
     </>
   );
 }
@@ -1184,6 +1410,8 @@ function App() {
   const { rows, loading, error, lastUpdated, reload } = useData();
   const [theme, toggleTheme] = useTheme();
   const [filters, setFilters] = useState({ search: '', rag: '', source: '', theme: '' });
+  const [drill, setDrill]     = useState(null);
+  const [aiMode, setAiMode]   = useState(null);
 
   const sources = useMemo(() => [...new Set(rows.map(r => r.source).filter(Boolean))].sort(), [rows]);
   const themesList = useMemo(() => {
@@ -1237,16 +1465,27 @@ function App() {
         ) : rows.length > 0 ? (
           <>
             <RagChips rows={rows} value={filters.rag} onChange={(v) => setFilters(f => ({...f, rag: v}))} />
-            <KpiGrid rows={filtered} />
+            <div className="flex flex-wrap items-center gap-2 mb-4 animate-slide-up">
+              <button onClick={() => setAiMode('insights')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-sm shadow-indigo-500/30 transition">
+                <span>💡</span> AI Insights
+              </button>
+              <button onClick={() => setAiMode('summary')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-cyan-500 to-teal-600 hover:from-cyan-600 hover:to-teal-700 text-white shadow-sm shadow-cyan-500/30 transition">
+                <span>📋</span> Summary
+              </button>
+              <span className="text-xs text-slate-600 dark:text-slate-400 ml-1">Both reflect the current filter scope.</span>
+            </div>
+            <KpiGrid rows={filtered} onDrill={(d) => setDrill(d)} />
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4 animate-slide-up">
-              <div className="lg:col-span-1"><RagDonut rows={filtered} theme={theme} /></div>
-              <div className="lg:col-span-2"><YearRagChart rows={filtered} theme={theme} /></div>
+              <div className="lg:col-span-1"><RagDonut rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} /></div>
+              <div className="lg:col-span-2"><YearRagChart rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} /></div>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4 animate-slide-up">
-              <ThemeChart rows={filtered} theme={theme} />
-              <SourceChart rows={filtered} theme={theme} />
+              <ThemeChart rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} />
+              <SourceChart rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} />
             </div>
-            <div className="mb-4 animate-slide-up"><SentimentChart rows={filtered} theme={theme} /></div>
+            <div className="mb-4 animate-slide-up"><SentimentChart rows={filtered} theme={theme} onDrill={(d) => setDrill(d)} /></div>
             <div className="animate-slide-up">
               <ReviewsTable
                 rows={rows}
@@ -1265,6 +1504,25 @@ function App() {
         </footer>
       </main>
       <ChatBot rows={rows} filters={filters} setFilters={setFilters} />
+      <DrillDownModal
+        drill={drill}
+        rows={filtered}
+        onClose={() => setDrill(null)}
+        onApplyAsFilter={(d) => setFilters(f => ({
+          ...f,
+          rag:    d.rag    !== undefined ? d.rag    : f.rag,
+          source: d.source !== undefined ? d.source : f.source,
+          theme:  d.theme  !== undefined ? d.theme  : f.theme,
+        }))}
+      />
+      {aiMode && (
+        <AiModal
+          mode={aiMode}
+          rows={filtered}
+          filters={filters}
+          onClose={() => setAiMode(null)}
+        />
+      )}
     </div>
   );
 }
