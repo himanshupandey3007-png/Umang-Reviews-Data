@@ -1088,13 +1088,17 @@ function AiModal({ mode, rows, filters, onClose }) {
 }
 
 // ============================================================
-// CHATBOT — calls a Cloudflare Worker proxy that forwards to Groq.
-// The worker holds the API key server-side so visitors don't need one.
-// See worker/DEPLOY.md for the 5-min setup.
+// CHATBOT — calls Groq's free API directly from the browser.
+//
+// ➜  PASTE YOUR GROQ API KEY ON THE LINE BELOW  ⬅
+//    Get one at https://console.groq.com/keys (free, 60 seconds)
+//
+// Security note: the key is visible in the page source. That's fine for a
+// personal / small-team dashboard — Groq enforces per-key rate limits and the
+// free tier resets daily. If you ever publish this widely, switch back to the
+// Cloudflare Worker proxy approach (see worker/DEPLOY.md).
 // ============================================================
-
-// PASTE YOUR DEPLOYED CLOUDFLARE WORKER URL HERE (no trailing slash):
-const CHAT_API_URL = 'https://umangchat.himanshupandey3007.workers.dev';
+const GROQ_API_KEY = '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';
 const GROQ_MODEL   = 'llama-3.3-70b-versatile';
 
 function compactRows(rows) {
@@ -1153,17 +1157,20 @@ function buildSystemPrompt(rows, filters) {
 }
 
 async function callChatApi({ systemPrompt, history, userText }) {
-  if (!CHAT_API_URL || CHAT_API_URL === 'REPLACE_WITH_YOUR_WORKER_URL') {
-    throw new Error('Chat is not configured yet. Deploy the Cloudflare Worker and paste its URL in index.html (see worker/DEPLOY.md).');
+  if (!GROQ_API_KEY || GROQ_API_KEY === 'PASTE_YOUR_GROQ_KEY_HERE') {
+    throw new Error('Chat not configured. Open index.html and paste your Groq API key into the GROQ_API_KEY constant near the top of the script (around line 1097).');
   }
   const messages = [
     { role: 'system', content: systemPrompt },
     ...history.slice(-8).map(m => ({ role: m.role, content: m.content })),
     { role: 'user', content: userText }
   ];
-  const res = await fetch(CHAT_API_URL, {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+    },
     body: JSON.stringify({
       model: GROQ_MODEL,
       messages,
@@ -1174,7 +1181,7 @@ async function callChatApi({ systemPrompt, history, userText }) {
   });
   if (!res.ok) {
     const t = await res.text();
-    throw new Error(`Chat API ${res.status}: ${t.slice(0,200)}`);
+    throw new Error(`Groq ${res.status}: ${t.slice(0,200)}`);
   }
   const json = await res.json();
   const raw = json.choices?.[0]?.message?.content || '';
