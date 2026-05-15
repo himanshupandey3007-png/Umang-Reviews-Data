@@ -542,8 +542,8 @@ function KpiGrid({ rows, onDrill }) {
               if (c.drill === 'all') onDrill && onDrill({});
               else onDrill && onDrill({ rag: c.drill });
             }}
-            className={`relative overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:shadow-none hover:shadow-[0_8px_24px_-8px_rgba(15,23,42,0.15)] dark:hover:shadow-none transition-all hover:-translate-y-0.5 ${isClickable ? 'cursor-pointer' : ''}`}>
-            <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${c.accent}`} />
+            className={`relative rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-4 shadow-[0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:shadow-none hover:shadow-[0_8px_24px_-8px_rgba(15,23,42,0.15)] dark:hover:shadow-none transition-all hover:-translate-y-0.5 ${isClickable ? 'cursor-pointer' : ''}`}>
+            <div className={`absolute inset-x-0 top-0 h-1 rounded-t-2xl bg-gradient-to-r ${c.accent}`} />
             <div className="flex items-center text-[10px] uppercase tracking-wider text-slate-600 dark:text-slate-400 font-bold mb-1">
               <span>{c.label}</span>
               <InfoTip text={c.info} />
@@ -1094,7 +1094,7 @@ function AiModal({ mode, rows, filters, onClose }) {
 // ============================================================
 
 // PASTE YOUR DEPLOYED CLOUDFLARE WORKER URL HERE (no trailing slash):
-const CHAT_API_URL = 'https://umang-reviews-data.himanshupandey3007.workers.dev';
+const CHAT_API_URL = 'https://umangreview.himanshupandey3007.workers.dev';
 const GROQ_MODEL   = 'llama-3.3-70b-versatile';
 
 function compactRows(rows) {
